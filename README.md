@@ -21,10 +21,18 @@ Un workflow est inclus dans `.github/workflows/deploy.yml`.
 - Recherche anime/manga via l’API publique Jikan, qui expose des données MyAnimeList.
 - Préférences d’interface : couleurs, mode sombre/clair, cartes compactes, grille/liste.
 - Statistiques de base et mise en page adaptée au mobile.
-- Sauvegarde locale via le navigateur.
+- Sauvegarde locale pour le mode invité, et synchronisation cloud pour les comptes connectés.
+- Comptes Supabase : inscription par e-mail, connexion, déconnexion et récupération/changement du mot de passe.
+- Bibliothèque synchronisée entre appareils, avec politiques RLS pour isoler les données de chaque utilisateur.
 
-## Limites importantes
-Cette version est un prototype : les données restent sur l’appareil et dans le navigateur utilisés. Il n’y a pas encore de comptes, de synchronisation cloud, ni d’espace amis fonctionnel. Jikan ne garantit pas une couverture complète des manhwa/webtoons. Ne mets pas d’informations sensibles dans cette version.
+## Configuration Supabase requise
+Le frontend utilise l’URL du projet et une clé **publishable** (prévue pour être exposée dans le navigateur). Ne jamais ajouter une clé `service_role` ou une clé secrète au site public.
 
-## Étape suivante
-Ajouter l’authentification et une base de données distante, puis connecter l’espace partagé. Supabase peut proposer une offre gratuite, mais ses quotas et conditions doivent être vérifiés au moment du déploiement. Les clés secrètes ne doivent jamais être placées dans le code public du navigateur.
+Dans le tableau de bord Supabase, ouvre **Authentication → URL Configuration** et configure :
+- **Site URL** : `https://lagoldene.github.io/anitrack/`
+- **Redirect URLs** : `https://lagoldene.github.io/anitrack/**`
+
+Les e-mails de confirmation et de récupération du mot de passe dépendent de cette configuration. Pour une vraie mise en production, configure également un service SMTP fiable et vérifie les quotas de l’offre Supabase.
+
+## Limites actuelles
+L’espace amis et les fonctions sociales ne sont pas encore implémentés. Jikan ne garantit pas une couverture complète des manhwa/webtoons.
