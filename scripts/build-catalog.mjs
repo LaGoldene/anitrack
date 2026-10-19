@@ -278,7 +278,7 @@ try {
   const anilistWebtoon = await fetchAniListCollection("Webtoon", { format: "WEBTOON" });
   if (anilistAnime.length) animeRows = unique([...anilistAnime, ...animeRows]);
   const mangaDexRows = [...anilistManga, ...anilistManhwa, ...anilistWebtoon];
-  const normalizeTitle = title => String(title || "").toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+  const normalizeTitle = title => String(title || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   const anilistByTitle = new Map(mangaDexRows.map(row => [normalizeTitle(row.title), row]));
   const withMangaDexCover = row => {
     const found = anilistByTitle.get(normalizeTitle(row.title));
