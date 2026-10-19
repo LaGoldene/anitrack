@@ -124,11 +124,20 @@ try {
     .filter(row => Number(row.idMal) > 0 && titleOf(row))
     .map(row => malRow(row, "anime"))
     .filter(Boolean));
-  const mangaSeedRows = unique(mangaData
-    .filter(row => Number(row.idMal) > 0 && titleOf(row))
-    .map(row => malRow(row, "manga"))
-    .filter(Boolean));
-  console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas.`);
+  const mangaRecords = mangaData.filter(row => Number(row.idMal) > 0 && titleOf(row));
+  const mangaSeedRows = unique(mangaRecords.map(row => malRow(row, "manga")).filter(Boolean));
+  const categoryOf = row => {
+    const kind = String(row.type || row.format || row.subtype || "").toUpperCase().replace(/[ _-]/g, "");
+    if (kind.includes("WEBTOON")) return "Webtoon";
+    if (kind.includes("MANHWA") || String(row.countryOfOrigin || row.country || "").toUpperCase() === "KR") return "Manhwa";
+    return "Manga";
+  };
+  const sourceManhwa = unique(mangaRecords.filter(row => categoryOf(row) === "Manhwa").map(row => malRow(row, "manhwa")).filter(Boolean));
+  const sourceWebtoon = unique(mangaRecords.filter(row => categoryOf(row) === "Webtoon").map(row => malRow(row, "webtoon")).filter(Boolean));
+  const typeCounts = {};
+  for (const row of mangaRecords) { const kind = String(row.type || row.format || row.subtype || "unknown"); typeCounts[kind] = (typeCounts[kind] || 0) + 1; }
+  console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas, ${sourceManhwa.length} manhwas, ${sourceWebtoon.length} webtoons.`);
+  console.log("Types source manga :", JSON.stringify(typeCounts));
 
   // MangaDex fournit les couvertures et identifie les œuvres coréennes/webtoon.
   for (let offset = 0; offset < 1500; offset += 100) {
@@ -151,8 +160,14 @@ try {
     const found = coverByMal.get(String(row.externalId));
     return found ? { ...row, cover: found.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres || row.genres, source: "MangaDex" } : row;
   });
-  const manhwaRows = mangaDexRows.filter(x => x.type === "Manhwa");
-  const webtoonRows = mangaDexRows.filter(x => x.type === "Webtoon");
+  const mangaDexByTitle = new Map(mangaDexRows.map(row => [row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, ""), row]));
+  const withMangaDexCover = row => {
+    const key = row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+    const found = mangaDexByTitle.get(key);
+    return found ? { ...row, cover: found.cover || row.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres?.length ? found.genres : row.genres, source: "MangaDex + catalogue statique" } : row;
+  };
+  const manhwaRows = unique([...sourceManhwa.map(withMangaDexCover), ...mangaDexRows.filter(x => x.type === "Manhwa")]);
+  const webtoonRows = unique([...sourceWebtoon.map(withMangaDexCover), ...mangaDexRows.filter(x => x.type === "Webtoon")]);
   const otherMangaDex = mangaDexRows.filter(x => x.type === "Manga");
   const seedManhwa = seedCatalog["manhwa:popular"] || seedCatalog.manhwa || [];
   const seedWebtoon = seedCatalog["webtoon:popular"] || seedCatalog.webtoon || [];
