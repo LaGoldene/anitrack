@@ -370,8 +370,8 @@ try {
   console.log("Couvertures réelles par liste :", JSON.stringify(Object.fromEntries(Object.entries(catalog).filter(([key, value]) => key.includes(":") && Array.isArray(value)).map(([key, rows]) => [key, rows.filter(row => row.cover && row.cover !== FALLBACK_COVER).length]))));
   console.log("Catalogue statique prêt :", JSON.stringify(counts));
 } catch (error) {
-  console.warn("Source distante indisponible ; conservation du catalogue déjà versionné :", String(error));
-  const catalog = { ...seedCatalog };
-  for (const [key, rows] of Object.entries(catalog)) if (Array.isArray(rows)) catalog[key] = rows.map(row => ({ ...row, cover: row.cover || FALLBACK_COVER }));
-  await writeFile("catalog.json", JSON.stringify({ updatedAt: new Date().toISOString(), catalog, source: "catalogue versionné de secours" }) + "\n", "utf8");
+  // Ne jamais publier le petit catalogue de secours (12 fiches par catégorie) après un échec distant.
+  // Le build doit échouer afin que GitHub Pages conserve la dernière version complète déjà publiée.
+  console.error("Génération du catalogue interrompue : publication annulée pour protéger le catalogue complet.", String(error));
+  process.exitCode = 1;
 }
