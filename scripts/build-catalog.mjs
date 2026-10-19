@@ -150,7 +150,6 @@ const seed = await readSeed();
 const seedCatalog = seed.catalog || {};
 let sourceOk = false;
 let animeRows = [];
-let mangaDexRows = [];
 try {
   const [animeData, mangaData, animeImages] = await Promise.all([
     fetchDataset("anime-full.json"),
