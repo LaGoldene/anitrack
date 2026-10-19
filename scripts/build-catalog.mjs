@@ -62,17 +62,48 @@ function parseCsvLine(line) {
   }
   out.push(value); return out;
 }
-function malRow(row, category) {
+function malRow(row, category, imageMap = new Map()) {
   const id = Number(row.idMal);
   const title = titleOf(row);
   if (!id || !title) return null;
+  const image = imageMap.get(id);
   return makeRow({
     id,
     title,
-    type: category === "anime" ? "Anime" : "Manga",
-    cover: FALLBACK_COVER,
+    type: category === "anime" ? "Anime" : category === "manhwa" ? "Manhwa" : category === "webtoon" ? "Webtoon" : "Manga",
+    cover: image || FALLBACK_COVER,
     source: "Catalogue statique"
   });
+}
+function parseCsvLine(line) {
+  const out = []; let value = ""; let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && quoted && line[i + 1] === '"') { value += '"'; i++; }
+    else if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) { out.push(value); value = ""; }
+    else value += ch;
+  }
+  out.push(value); return out;
+}
+async function fetchAnimeImageMap() {
+  const response = await fetch("https://raw.githubusercontent.com/meesvandongen/anime-dataset/main/data/anime.csv", { signal: AbortSignal.timeout(60000) });
+  if (!response.ok) throw new Error("anime.csv HTTP " + response.status);
+  const lines = (await response.text()).split(/\r?\n/);
+  const headers = parseCsvLine(lines[0]).map(x => x.trim().toLowerCase());
+  const idIndex = headers.findIndex(x => ["id", "mal_id", "anime_id"].includes(x));
+  const imageIndex = headers.findIndex(x => ["image", "picture", "main_picture", "image_url", "picture_url"].includes(x));
+  if (idIndex < 0 || imageIndex < 0) throw new Error("Colonnes image absentes : " + headers.slice(0, 15).join(","));
+  const map = new Map();
+  for (const line of lines.slice(1)) {
+    if (!line) continue;
+    const cols = parseCsvLine(line); const id = Number(cols[idIndex]); let image = String(cols[imageIndex] || "").trim();
+    if (!id || !image) continue;
+    if (!/^https?:\/\//i.test(image)) image = "https://cdn.myanimelist.net/images/anime/" + image.replace(/\.jpg$/i, "") + ".jpg";
+    map.set(id, image);
+  }
+  console.log("Images d’animes chargées :", map.size);
+  return map;
 }
 async function fetchMangaDexPage(offset) {
   const url = new URL(MANGADEX);
@@ -116,13 +147,14 @@ let sourceOk = false;
 let animeRows = [];
 let mangaDexRows = [];
 try {
-  const [animeData, mangaData] = await Promise.all([
+  const [animeData, mangaData, animeImages] = await Promise.all([
     fetchDataset("anime-full.json"),
-    fetchDataset("manga-full.json")
+    fetchDataset("manga-full.json"),
+    fetchAnimeImageMap().catch(error => { console.warn("Images anime indisponibles :", String(error)); return new Map(); })
   ]);
   animeRows = unique(animeData
     .filter(row => Number(row.idMal) > 0 && titleOf(row))
-    .map(row => malRow(row, "anime"))
+    .map(row => malRow(row, "anime", animeImages))
     .filter(Boolean));
   const mangaRecords = mangaData.filter(row => Number(row.idMal) > 0 && titleOf(row));
   const mangaSeedRows = unique(mangaRecords.map(row => malRow(row, "manga")).filter(Boolean));
