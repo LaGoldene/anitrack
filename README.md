@@ -24,6 +24,8 @@ Un workflow est inclus dans `.github/workflows/deploy.yml`.
 - Sauvegarde locale pour le mode invité, et synchronisation cloud pour les comptes connectés.
 - Comptes Supabase : inscription par e-mail, connexion, déconnexion et récupération/changement du mot de passe.
 - Bibliothèque synchronisée entre appareils, avec politiques RLS pour isoler les données de chaque utilisateur.
+- Espace amis : recherche par pseudo, demandes d’amitié, acceptation/refus, annulation et retrait d’un ami.
+- Calendrier des diffusions avec nouvelles tentatives, cache local et affichage de secours de la saison en cours si le calendrier hebdomadaire est indisponible.
 
 ## Configuration Supabase requise
 Le frontend utilise l’URL du projet et une clé **publishable** (prévue pour être exposée dans le navigateur). Ne jamais ajouter une clé `service_role` ou une clé secrète au site public.
@@ -35,4 +37,4 @@ Dans le tableau de bord Supabase, ouvre **Authentication → URL Configuration**
 Les e-mails de confirmation et de récupération du mot de passe dépendent de cette configuration. Pour une vraie mise en production, configure également un service SMTP fiable et vérifie les quotas de l’offre Supabase.
 
 ## Limites actuelles
-L’espace amis et les fonctions sociales ne sont pas encore implémentés. Jikan ne garantit pas une couverture complète des manhwa/webtoons.
+Les horaires du calendrier dépendent des données de Jikan et peuvent être incomplets ; en cas d’indisponibilité, le site affiche des animes de la saison sans horaire précis. Les profils sont recherchables par pseudo uniquement ; les adresses e-mail ne sont pas exposées dans l’espace amis. Les fonctions sociales supplémentaires (commentaires, fil d’activité, partage public de bibliothèque) ne sont pas encore implémentées. Jikan ne garantit pas une couverture complète des manhwa/webtoons.
