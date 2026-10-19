@@ -105,12 +105,15 @@ async function fetchMangaDexPage(offset, filters = {}) {
   if (filters.tagId) url.searchParams.append("includedTags[]", filters.tagId);
   return getJson(url.toString(), 20000);
 }
-async function fetchMangaDexCollection(filters = {}, max = MAX_PER_CATEGORY) {
+async function fetchMangaDexCollection(filters = {}, max = MAX_PER_CATEGORY, forcedType = "") {
   const rows = [];
   for (let offset = 0; offset < max; offset += 100) {
     const page = await fetchMangaDexPage(offset, filters);
     const items = page.data || [];
-    rows.push(...items.map(fromMangaDex).filter(x => x?.title));
+    rows.push(...items.map(fromMangaDex).filter(x => x?.title).map(row => {
+      if (!forcedType) return row;
+      return { ...row, type: forcedType, id: "catalog-" + forcedType.toLowerCase() + "-" + (row.externalId || row.mangaDexId) };
+    }));
     if (items.length < 100 || offset + 100 >= Number(page.total || 0)) break;
     await pause(900);
   }
@@ -173,10 +176,14 @@ try {
   console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas, ${sourceManhwa.length} manhwas, ${sourceWebtoon.length} webtoons.`);
   console.log("Types source manga :", JSON.stringify(typeCounts));
 
-  // Récupération séparée : la liste générale ne contient pas assez de manhwas/webtoons.
+  // Chaque format est récupéré séparément afin que les doublons de la recherche générale
+  // ne fassent pas disparaître les manhwas et webtoons. Les fiches MangaDex gardent leurs couvertures.
+  let generalRows = [];
+  let koreanRows = [];
+  let longStripRows = [];
   try {
-    mangaDexRows = await fetchMangaDexCollection({}, 1500);
-    console.log("MangaDex général :", mangaDexRows.length, "fiches.");
+    generalRows = await fetchMangaDexCollection({}, 3000);
+    console.log("MangaDex général :", generalRows.length, "fiches.");
   } catch (error) {
     console.warn("MangaDex général interrompu :", String(error));
   }
@@ -185,20 +192,27 @@ try {
     const longStripTag = (tagResponse.data || []).find(tag =>
       String(tag.attributes?.name?.en || "").trim().toLowerCase() === "long strip"
     );
-    const koreanRows = await fetchMangaDexCollection({ language: "ko" }, 1500);
-    mangaDexRows.push(...koreanRows);
-    console.log("MangaDex langue coréenne :", koreanRows.length, "fiches.");
+    koreanRows = await fetchMangaDexCollection({ language: "ko" }, 3000, "Manhwa");
+    console.log("MangaDex langue coréenne / manhwa :", koreanRows.length, "fiches.");
     if (longStripTag?.id) {
-      const webtoonRows = await fetchMangaDexCollection({ tagId: longStripTag.id }, 1500);
-      mangaDexRows.push(...webtoonRows);
-      console.log("MangaDex format Long Strip :", webtoonRows.length, "fiches.");
+      longStripRows = await fetchMangaDexCollection({ tagId: longStripTag.id }, 3000, "Webtoon");
+      console.log("MangaDex format Long Strip / webtoon :", longStripRows.length, "fiches.");
     } else {
       console.warn("Tag MangaDex Long Strip introuvable ; récupération webtoon dédiée impossible.");
     }
   } catch (error) {
     console.warn("Récupération dédiée manhwa/webtoon interrompue :", String(error));
   }
-  mangaDexRows = unique(mangaDexRows);
+  const mangaDexRows = unique([...generalRows, ...koreanRows, ...longStripRows]);
+  const mangaDexByTitle = new Map(mangaDexRows.map(row => [row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, ""), row]));
+  const withMangaDexCover = row => {
+    const key = row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+    const found = mangaDexByTitle.get(key);
+    return found ? { ...row, cover: found.cover || row.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres?.length ? found.genres : row.genres, source: "MangaDex + catalogue statique" } : row;
+  };
+  const manhwaRows = unique([...koreanRows, ...sourceManhwa.map(withMangaDexCover)]);
+  const webtoonRows = unique([...longStripRows, ...sourceWebtoon.map(withMangaDexCover)]);
+  const otherMangaDex = unique(generalRows.filter(x => x.type === "Manga"));
   console.log("MangaDex total unique :", mangaDexRows.length, "fiches.");
   sourceOk = animeRows.length > 100 && mangaSeedRows.length > 100;
   // Keep the broad MAL list but replace matching titles with MangaDex covers where possible.
@@ -228,14 +242,14 @@ try {
       : mangaDexRows.find(row => row.title.toLowerCase() === String(item.title).toLowerCase());
     return { ...item, cover: match?.cover || FALLBACK_COVER };
   });
-  const popularAnime = unique([...coverSeed(seedAnime, "Anime"), ...animeRows]).slice(0, MAX_PER_CATEGORY);
-  const newAnime = unique([...coverSeed(seedCatalog["anime:new"] || [], "Anime"), ...animeRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
-  const popularManga = unique([...coverSeed(seedManga, "Manga"), ...otherMangaDex, ...mangaRows]).slice(0, MAX_PER_CATEGORY);
-  const newManga = unique([...coverSeed(seedCatalog["manga:new"] || [], "Manga"), ...otherMangaDex.slice().reverse(), ...mangaRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
-  const popularManhwa = unique([...coverSeed(seedManhwa, "Manhwa"), ...manhwaRows]).slice(0, MAX_PER_CATEGORY);
-  const newManhwa = unique([...coverSeed(seedCatalog["manhwa:new"] || [], "Manhwa"), ...manhwaRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
-  const popularWebtoon = unique([...coverSeed(seedWebtoon, "Webtoon"), ...webtoonRows]).slice(0, MAX_PER_CATEGORY);
-  const newWebtoon = unique([...coverSeed(seedCatalog["webtoon:new"] || [], "Webtoon"), ...webtoonRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
+  const popularAnime = unique([...animeRows, ...coverSeed(seedAnime, "Anime")]).slice(0, MAX_PER_CATEGORY);
+  const newAnime = unique([...animeRows.slice().reverse(), ...coverSeed(seedCatalog["anime:new"] || [], "Anime")]).slice(0, MAX_PER_CATEGORY);
+  const popularManga = unique([...otherMangaDex, ...mangaRows.map(withMangaDexCover), ...coverSeed(seedManga, "Manga")]).slice(0, MAX_PER_CATEGORY);
+  const newManga = unique([...otherMangaDex.slice().reverse(), ...mangaRows.slice().reverse().map(withMangaDexCover), ...coverSeed(seedCatalog["manga:new"] || [], "Manga")]).slice(0, MAX_PER_CATEGORY);
+  const popularManhwa = unique([...manhwaRows, ...coverSeed(seedManhwa, "Manhwa")]).slice(0, MAX_PER_CATEGORY);
+  const newManhwa = unique([...manhwaRows.slice().reverse(), ...coverSeed(seedCatalog["manhwa:new"] || [], "Manhwa")]).slice(0, MAX_PER_CATEGORY);
+  const popularWebtoon = unique([...webtoonRows, ...coverSeed(seedWebtoon, "Webtoon")]).slice(0, MAX_PER_CATEGORY);
+  const newWebtoon = unique([...webtoonRows.slice().reverse(), ...coverSeed(seedCatalog["webtoon:new"] || [], "Webtoon")]).slice(0, MAX_PER_CATEGORY);
   const catalog = {
     ...seedCatalog,
     "anime:popular": popularAnime, "anime:new": newAnime, anime: popularAnime,
@@ -246,6 +260,7 @@ try {
   for (const [key, rows] of Object.entries(catalog)) if (Array.isArray(rows)) catalog[key] = rows.map(row => ({ ...row, cover: row.cover || FALLBACK_COVER }));
   const counts = Object.fromEntries(Object.entries(catalog).filter(([key, value]) => key.includes(":") && Array.isArray(value)).map(([key, value]) => [key, value.length]));
   await writeFile("catalog.json", JSON.stringify({ updatedAt: new Date().toISOString(), catalog, source: "MAL static list + MangaDex covers" }) + "\n", "utf8");
+  console.log("Couvertures réelles par liste :", JSON.stringify(Object.fromEntries(Object.entries(catalog).filter(([key, value]) => key.includes(":") && Array.isArray(value)).map(([key, rows]) => [key, rows.filter(row => row.cover && row.cover !== FALLBACK_COVER).length]))));
   console.log("Catalogue statique prêt :", JSON.stringify(counts));
 } catch (error) {
   console.warn("Source distante indisponible ; conservation du catalogue déjà versionné :", String(error));
