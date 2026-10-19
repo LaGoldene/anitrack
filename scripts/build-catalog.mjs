@@ -303,7 +303,7 @@ try {
   } catch (error) { console.warn("MangaDex manhwa/webtoon partiel :", String(error)); }
 
   const mangaDexRows = unique([...generalRows, ...koreanRows, ...longStripRows]);
-  const normalizeTitle = title => String(title || "").toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+  const normalizeTitle = title => String(title || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   const enrichedRows = unique([...anilistManga, ...anilistManhwa, ...anilistWebtoon, ...mangaDexRows]);
   const byTitle = new Map(enrichedRows.map(row => [normalizeTitle(row.title), row]));
   const withMangaDexCover = row => {
