@@ -281,7 +281,9 @@ try {
   const anilistAnime = await fetchAniListCollection("Anime");
   const anilistManga = await fetchAniListCollection("Manga", { country: "JP", format: "MANGA" }, 1000);
   const anilistManhwa = await fetchAniListCollection("Manhwa", { country: "KR", format: "MANGA" }, 1000);
-  // AniList ne définit pas WEBTOON comme valeur de MediaFormat : ce filtre renvoie HTTP 400.\n  // Les webtoons sont récupérés depuis MangaDex via le tag Long Strip ci-dessous.\n  const anilistWebtoon = [];
+  // AniList ne définit pas WEBTOON comme valeur de MediaFormat : ce filtre renvoie HTTP 400.
+  // Les webtoons sont récupérés depuis MangaDex via le tag Long Strip ci-dessous.
+  const anilistWebtoon = [];
   if (anilistAnime.length) animeRows = unique([...anilistAnime, ...animeRows]);
 
   let generalRows = [];
