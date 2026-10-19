@@ -328,7 +328,9 @@ try {
   const manhwaRows = unique([...anilistManhwa, ...koreanRows, ...sourceManhwa.map(withMangaDexCover)]);
   const webtoonRows = unique([...anilistWebtoon, ...longStripRows, ...sourceWebtoon.map(withMangaDexCover)]);
   const otherMangaDex = unique([...anilistManga, ...generalRows.filter(x => x.type === "Manga"), ...mangaRows]);
-  if (!anilistAnime.length) console.warn("AniList Anime vide : conservation du catalogue anime statique et de ses couvertures.");\n  if (!longStripRows.length) console.warn("MangaDex Long Strip vide : les webtoons dépendront du catalogue de secours.");\n  console.log("Sources récupérées :", JSON.stringify({
+  if (!anilistAnime.length) console.warn("AniList Anime vide : conservation du catalogue anime statique et de ses couvertures.");
+  if (!longStripRows.length) console.warn("MangaDex Long Strip vide : les webtoons dépendront du catalogue de secours.");
+  console.log("Sources récupérées :", JSON.stringify({
     anime: anilistAnime.length, manga: anilistManga.length, manhwaAniList: anilistManhwa.length,
     webtoonAniList: anilistWebtoon.length, mangaDex: generalRows.length, korean: koreanRows.length, longStrip: longStripRows.length
   }));
