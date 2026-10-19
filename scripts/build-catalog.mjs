@@ -1,8 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-const API = "https://graphql.anilist.co";
+const LISTS = "https://raw.githubusercontent.com/anime-and-manga/lists/main";
+const ANIME_CSV = "https://raw.githubusercontent.com/meesvandongen/anime-dataset/main/data/anime.csv";
+const MANGADEX = "https://api.mangadex.org/manga";
 const MAX_PER_CATEGORY = 1500;
-const PER_PAGE = 50;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const FALLBACK_COVER = "data:image/svg+xml;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#42131b"/><stop offset="1" stop-color="#0b0809"/></linearGradient></defs><rect width="300" height="450" fill="url(#g)"/><circle cx="150" cy="175" r="75" fill="#e63946" opacity=".28"/><path d="M0 350L300 80M-20 410L280 140" stroke="#e63946" stroke-width="2" opacity=".3"/><text x="150" y="235" fill="#ff8b93" font-family="sans-serif" font-size="46" text-anchor="middle">AniTrack</text><text x="150" y="270" fill="#fff5f5" font-family="sans-serif" font-size="16" text-anchor="middle">Couverture indisponible</text></svg>').toString("base64");
 
@@ -10,152 +11,217 @@ async function readSeed() {
   try { return JSON.parse(await readFile("catalog.json", "utf8")); }
   catch { return { updatedAt: "", catalog: {} }; }
 }
-
-const query = `
-query ($page: Int, $perPage: Int, $type: MediaType, $sort: [MediaSort]) {
-  Page(page: $page, perPage: $perPage) {
-    media(type: $type, sort: $sort, isAdult: false) {
-      id idMal type format countryOfOrigin
-      title { english romaji native }
-      coverImage { large extraLarge }
-      startDate { year }
-      description(asHtml: false)
-      averageScore episodes chapters
-      genres
-      tags { name rank }
-    }
-  }
-}`;
-
-async function fetchPage(type, page, sort) {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const response = await fetch(API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query, variables: { page, perPage: PER_PAGE, type, sort } }),
-        signal: AbortSignal.timeout(25000)
-      });
-      if (!response.ok) throw new Error("AniList HTTP " + response.status);
-      const data = await response.json();
-      if (data.errors?.length) throw new Error(data.errors[0].message);
-      return data.data?.Page?.media || [];
-    } catch (error) {
-      lastError = error;
-      await pause(1200 * (attempt + 1));
-    }
-  }
-  throw lastError;
+async function getJson(url, timeout = 45000) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeout), headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(url + " HTTP " + response.status);
+  return response.json();
 }
-
+async function fetchDataset(path) {
+  const data = await getJson(`${LISTS}/${path}`);
+  if (!Array.isArray(data)) throw new Error(path + ": format JSON inattendu");
+  return data;
+}
 function titleOf(row) {
-  return String(row.title?.english || row.title?.romaji || row.title?.native || "").trim();
+  const titles = row.titles || {};
+  return String(titles.english || titles.romaji || titles.native || "").trim();
 }
-function normalize(row, category) {
-  const title = titleOf(row);
-  if (!title) return null;
-  const malId = Number(row.idMal) || Number(row.id);
-  const type = category === "anime" ? "Anime" : category === "manhwa" ? "Manhwa" : category === "webtoon" ? "Webtoon" : "Manga";
-  const cover = row.coverImage?.extraLarge || row.coverImage?.large || FALLBACK_COVER;
-  const synopsis = String(row.description || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
+function makeRow({ id, title, type, cover, year = "", synopsis = "", score = null, total = 0, genres = [], source = "Catalogue statique" }) {
+  if (!id || !title) return null;
   return {
-    id: "anilist-" + category + "-" + malId,
-    externalId: malId,
-    title,
+    id: `catalog-${type.toLowerCase()}-${id}`,
+    externalId: Number(id) || 0,
+    title: String(title).trim(),
     type,
-    total: Number(category === "anime" ? row.episodes : row.chapters) || 0,
+    total: Number(total) || 0,
     progress: 0,
     status: "À commencer",
-    cover,
-    year: row.startDate?.year ? String(row.startDate.year) : "",
-    synopsis,
-    score: row.averageScore ? Number((row.averageScore / 10).toFixed(1)) : null,
-    genres: Array.isArray(row.genres) ? row.genres : [],
-    source: "AniList"
+    cover: cover || FALLBACK_COVER,
+    year: year ? String(year) : "",
+    synopsis: String(synopsis || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200),
+    score: score == null ? null : Number(score),
+    genres: Array.isArray(genres) ? genres : [],
+    source
   };
 }
 function unique(rows) {
   const map = new Map();
-  for (const row of rows) if (row?.externalId && row?.title && !map.has(String(row.externalId))) map.set(String(row.externalId), row);
+  for (const row of rows) {
+    if (!row?.title) continue;
+    const key = row.externalId ? String(row.externalId) : row.title.toLowerCase();
+    if (!map.has(key)) map.set(key, row);
+  }
   return [...map.values()];
 }
-function isWebtoon(row) {
-  const tags = (row.tags || []).map(t => String(t.name).toLowerCase());
-  return tags.some(t => t === "webtoon" || t === "full color" || t === "long strip") ||
-    String(row.format || "").toUpperCase() === "WEBTOON";
+function parseCsvLine(line) {
+  const out = []; let value = ""; let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && quoted && line[i + 1] === '"') { value += '"'; i++; }
+    else if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) { out.push(value); value = ""; }
+    else value += ch;
+  }
+  out.push(value); return out;
 }
-function isManhwa(row) {
-  return String(row.countryOfOrigin || "").toUpperCase() === "KR" ||
-    (row.tags || []).some(t => /manhwa|korean comic/i.test(t.name || ""));
+async function fetchAnimeImageMap() {
+  const response = await fetch(ANIME_CSV, { signal: AbortSignal.timeout(60000) });
+  if (!response.ok) throw new Error("anime.csv HTTP " + response.status);
+  const csv = await response.text();
+  const lines = csv.split(/\r?\n/);
+  const headers = parseCsvLine(lines[0]).map(x => x.trim().toLowerCase());
+  const idIndex = headers.findIndex(x => x === "id" || x === "mal_id" || x === "anime_id");
+  const imageIndex = headers.findIndex(x => ["image", "picture", "main_picture", "image_url", "picture_url"].includes(x));
+  const titleIndex = headers.findIndex(x => x === "title" || x === "title_english");
+  const yearIndex = headers.findIndex(x => ["year", "start_year"].includes(x));
+  const scoreIndex = headers.findIndex(x => ["mean", "score", "rating"].includes(x));
+  const map = new Map();
+  if (idIndex < 0 || imageIndex < 0) {
+    console.warn("Colonnes d'images non reconnues dans anime.csv :", headers.slice(0, 15).join(","));
+    return map;
+  }
+  for (const line of lines.slice(1)) {
+    if (!line) continue;
+    const row = parseCsvLine(line);
+    const id = Number(row[idIndex]);
+    let image = String(row[imageIndex] || "").trim();
+    if (!id || !image) continue;
+    if (/^https?:\/\//i.test(image)) { /* full image URL */ }
+    else image = `https://cdn.myanimelist.net/images/anime/${image}.jpg`;
+    map.set(id, { cover: image, title: row[titleIndex] || "", year: row[yearIndex] || "", score: row[scoreIndex] || null });
+  }
+  console.log("Images anime trouvées dans le dataset :", map.size);
+  return map;
+}
+function malRow(row, category, imageMap = new Map()) {
+  const id = Number(row.idMal);
+  const title = titleOf(row);
+  if (!id || !title) return null;
+  const image = imageMap.get(id);
+  return makeRow({
+    id,
+    title,
+    type: category === "anime" ? "Anime" : "Manga",
+    cover: image?.cover || FALLBACK_COVER,
+    year: image?.year || "",
+    score: image?.score,
+    source: "Catalogue statique"
+  });
+}
+async function fetchMangaDexPage(offset) {
+  const url = new URL(MANGADEX);
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("offset", String(offset));
+  url.searchParams.append("includes[]", "cover_art");
+  url.searchParams.append("contentRating[]", "safe");
+  url.searchParams.set("order[followedCount]", "desc");
+  return getJson(url.toString(), 30000);
+}
+function fromMangaDex(item) {
+  const a = item.attributes || {};
+  const title = a.title?.en || Object.values(a.title || {})[0] || "";
+  const coverRel = (item.relationships || []).find(r => r.type === "cover_art");
+  const filename = coverRel?.attributes?.fileName;
+  const cover = filename ? `https://uploads.mangadex.org/covers/${item.id}/${filename}.256.jpg` : FALLBACK_COVER;
+  const malId = Number(a.links?.mal) || Number(a.links?.anilist) || 0;
+  const tagNames = (a.tags || []).map(t => String(t.attributes?.name?.en || "").toLowerCase());
+  const isKorean = String(a.originalLanguage || "").toLowerCase() === "ko";
+  const isWebtoon = tagNames.some(t => t === "webtoon" || t === "long strip");
+  const type = isWebtoon ? "Webtoon" : isKorean ? "Manhwa" : "Manga";
+  return {
+    ...makeRow({
+      id: malId || item.id,
+      title,
+      type,
+      cover,
+      synopsis: a.description?.en || "",
+      year: a.year || "",
+      genres: tagNames.filter(t => t && t !== "webtoon"),
+      source: "MangaDex"
+    }),
+    externalId: malId || Number.parseInt(item.id.replace(/-/g, "").slice(0, 10), 16) || 0,
+    mangaDexId: item.id
+  };
 }
 
 const seed = await readSeed();
 const seedCatalog = seed.catalog || {};
-const fetched = { anime: [], manga: [], manhwa: [], webtoon: [] };
 let sourceOk = false;
-
+let animeRows = [];
+let mangaDexRows = [];
 try {
-  // Popularity pages give a broad, preloaded catalogue; recent pages add newly updated works.
-  for (const [kind, type, pagesPopular, pagesRecent] of [
-    ["anime", "ANIME", 30, 15],
-    ["manga", "MANGA", 50, 20]
-  ]) {
-    const popular = [];
-    const recent = [];
-    for (let page = 1; page <= pagesPopular; page++) {
-      popular.push(...await fetchPage(type, page, ["POPULARITY_DESC"]));
-      await pause(750);
+  const [animeData, mangaData, imageMap] = await Promise.all([
+    fetchDataset("anime-full.json"),
+    fetchDataset("manga-full.json"),
+    fetchAnimeImageMap().catch(error => { console.warn("Images anime indisponibles :", String(error)); return new Map(); })
+  ]);
+  animeRows = unique(animeData
+    .filter(row => Number(row.idMal) > 0 && titleOf(row))
+    .map(row => malRow(row, "anime", imageMap))
+    .filter(Boolean));
+  const mangaSeedRows = unique(mangaData
+    .filter(row => Number(row.idMal) > 0 && titleOf(row))
+    .map(row => malRow(row, "manga"))
+    .filter(Boolean));
+  console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas.`);
+
+  // MangaDex fournit les couvertures et identifie les œuvres coréennes/webtoon.
+  for (let offset = 0; offset < 3000; offset += 100) {
+    try {
+      const page = await fetchMangaDexPage(offset);
+      const items = page.data || [];
+      mangaDexRows.push(...items.map(fromMangaDex).filter(x => x?.title));
+      if (items.length < 100 || offset + 100 >= Number(page.total || 0)) break;
+      await pause(1200);
+    } catch (error) {
+      console.warn("MangaDex interrompu à offset " + offset + " :", String(error));
+      break;
     }
-    for (let page = 1; page <= pagesRecent; page++) {
-      recent.push(...await fetchPage(type, page, ["UPDATED_AT_DESC"]));
-      await pause(750);
-    }
-    fetched[kind] = unique([...popular, ...recent].map(row => normalize(row, kind)).filter(Boolean));
-    if (kind === "manga") {
-      const mangaRows = unique([...popular, ...recent]);
-      fetched.manhwa = unique(mangaRows.filter(isManhwa).map(row => normalize(row, "manhwa")).filter(Boolean));
-      fetched.webtoon = unique(mangaRows.filter(isWebtoon).map(row => normalize(row, "webtoon")).filter(Boolean));
-    }
-    console.log(`AniList ${kind}: ${fetched[kind].length} fiches, ${kind === "manga" ? fetched.manhwa.length + " manhwa / " + fetched.webtoon.length + " webtoons" : "couvertures chargées"}`);
   }
-  sourceOk = fetched.anime.length > 100 && fetched.manga.length > 100;
+  console.log("MangaDex : " + mangaDexRows.length + " fiches récupérées.");
+  sourceOk = animeRows.length > 100 && mangaSeedRows.length > 100;
+  // Keep the broad MAL list but replace matching titles with MangaDex covers where possible.
+  const coverByMal = new Map(mangaDexRows.filter(x => x.externalId).map(x => [String(x.externalId), x]));
+  const mangaRows = mangaSeedRows.map(row => {
+    const found = coverByMal.get(String(row.externalId));
+    return found ? { ...row, cover: found.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres || row.genres, source: "MangaDex" } : row;
+  });
+  const manhwaRows = mangaDexRows.filter(x => x.type === "Manhwa");
+  const webtoonRows = mangaDexRows.filter(x => x.type === "Webtoon");
+  const otherMangaDex = mangaDexRows.filter(x => x.type === "Manga");
+  const seedManhwa = seedCatalog["manhwa:popular"] || seedCatalog.manhwa || [];
+  const seedWebtoon = seedCatalog["webtoon:popular"] || seedCatalog.webtoon || [];
+  const seedManga = seedCatalog["manga:popular"] || seedCatalog.manga || [];
+  const seedAnime = seedCatalog["anime:popular"] || seedCatalog.anime || [];
+
+  const coverSeed = (items, type) => items.map(item => {
+    if (item.cover) return item;
+    const match = type === "Anime"
+      ? animeRows.find(row => row.externalId === item.externalId || row.title.toLowerCase() === String(item.title).toLowerCase())
+      : mangaDexRows.find(row => row.title.toLowerCase() === String(item.title).toLowerCase());
+    return { ...item, cover: match?.cover || FALLBACK_COVER };
+  });
+  const popularAnime = unique([...coverSeed(seedAnime, "Anime"), ...animeRows]).slice(0, MAX_PER_CATEGORY);
+  const newAnime = unique([...coverSeed(seedCatalog["anime:new"] || [], "Anime"), ...animeRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
+  const popularManga = unique([...coverSeed(seedManga, "Manga"), ...otherMangaDex, ...mangaRows]).slice(0, MAX_PER_CATEGORY);
+  const newManga = unique([...coverSeed(seedCatalog["manga:new"] || [], "Manga"), ...otherMangaDex.slice().reverse(), ...mangaRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
+  const popularManhwa = unique([...coverSeed(seedManhwa, "Manhwa"), ...manhwaRows]).slice(0, MAX_PER_CATEGORY);
+  const newManhwa = unique([...coverSeed(seedCatalog["manhwa:new"] || [], "Manhwa"), ...manhwaRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
+  const popularWebtoon = unique([...coverSeed(seedWebtoon, "Webtoon"), ...webtoonRows]).slice(0, MAX_PER_CATEGORY);
+  const newWebtoon = unique([...coverSeed(seedCatalog["webtoon:new"] || [], "Webtoon"), ...webtoonRows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
+  const catalog = {
+    ...seedCatalog,
+    "anime:popular": popularAnime, "anime:new": newAnime, anime: popularAnime,
+    "manga:popular": popularManga, "manga:new": newManga, manga: popularManga,
+    "manhwa:popular": popularManhwa, "manhwa:new": newManhwa, manhwa: popularManhwa,
+    "webtoon:popular": popularWebtoon, "webtoon:new": newWebtoon, webtoon: popularWebtoon
+  };
+  for (const [key, rows] of Object.entries(catalog)) if (Array.isArray(rows)) catalog[key] = rows.map(row => ({ ...row, cover: row.cover || FALLBACK_COVER }));
+  const counts = Object.fromEntries(Object.entries(catalog).filter(([key, value]) => key.includes(":") && Array.isArray(value)).map(([key, value]) => [key, value.length]));
+  await writeFile("catalog.json", JSON.stringify({ updatedAt: new Date().toISOString(), catalog, source: "MAL static list + MangaDex covers" }) + "\n", "utf8");
+  console.log("Catalogue statique prêt :", JSON.stringify(counts));
 } catch (error) {
-  console.warn("Source AniList indisponible ; conservation du catalogue déjà versionné :", String(error));
-}
-
-const catalog = { ...seedCatalog };
-if (sourceOk) {
-  for (const kind of ["anime", "manga", "manhwa", "webtoon"]) {
-    const seedPopular = seedCatalog[kind + ":popular"] || seedCatalog[kind] || [];
-    const seedNew = seedCatalog[kind + ":new"] || [];
-    const rows = fetched[kind] || [];
-    const withSeedCovers = seedPopular.map(item => {
-      const found = rows.find(row => String(row.externalId) === String(item.externalId) || row.title.toLowerCase() === String(item.title).toLowerCase());
-      return found ? { ...item, ...found, id: item.id, progress: item.progress || 0, status: item.status || "À commencer" } : { ...item, cover: item.cover || FALLBACK_COVER };
-    });
-    const popular = unique([...withSeedCovers, ...rows]).slice(0, MAX_PER_CATEGORY);
-    const recent = unique([...seedNew.map(item => ({ ...item, cover: item.cover || FALLBACK_COVER })), ...rows.slice().reverse()]).slice(0, MAX_PER_CATEGORY);
-    catalog[kind + ":popular"] = popular;
-    catalog[kind + ":new"] = recent;
-    catalog[kind] = popular;
-  }
-} else {
-  // Even the fallback catalog shows a consistent cover image rather than an empty tile.
-  for (const [key, rows] of Object.entries(catalog)) {
-    if (Array.isArray(rows)) catalog[key] = rows.map(row => ({ ...row, cover: row.cover || FALLBACK_COVER }));
-  }
-}
-
-const counts = Object.fromEntries(Object.entries(catalog)
-  .filter(([key, value]) => key.includes(":") && Array.isArray(value))
-  .map(([key, value]) => [key, value.length]));
-await writeFile("catalog.json", JSON.stringify({
-  updatedAt: new Date().toISOString(),
-  catalog,
-  source: sourceOk ? "AniList GraphQL" : "catalogue versionné de secours"
-}) + "\n", "utf8");
-console.log("Catalogue statique prêt :", JSON.stringify(counts));
-if (!Object.values(catalog).some(value => Array.isArray(value) && value.length > 0)) {
-  throw new Error("Le catalogue statique est vide.");
+  console.warn("Source distante indisponible ; conservation du catalogue déjà versionné :", String(error));
+  const catalog = { ...seedCatalog };
+  for (const [key, rows] of Object.entries(catalog)) if (Array.isArray(rows)) catalog[key] = rows.map(row => ({ ...row, cover: row.cover || FALLBACK_COVER }));
+  await writeFile("catalog.json", JSON.stringify({ updatedAt: new Date().toISOString(), catalog, source: "catalogue versionné de secours" }) + "\n", "utf8");
 }
