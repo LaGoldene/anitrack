@@ -202,7 +202,7 @@ function rowFromCloud(row){
 }
 function rowToCloud(item){
   const metadata={...item};delete metadata.id;delete metadata.title;delete metadata.type;delete metadata.status;delete metadata.progress;delete metadata.total;delete metadata.year;delete metadata.cover;delete metadata.synopsis;delete metadata.score;delete metadata.genres;delete metadata.source;delete metadata.externalId;delete metadata.favorite;delete metadata.watchLater;
-  return {user_id:currentUser.id,item_id:String(item.id||crypto.randomUUID()),title:String(item.title||"Sans titre"),type:["Anime","Manga","Manhwa","Webtoon"].includes(item.type)?item.type:"Anime",status:["À commencer","En cours","En pause","Terminé","Abandonné"].includes(item.status)?item.status:"À commencer",progress:Math.max(0,Math.floor(Number(item.progress)||0)),total:Math.max(0,Math.floor(Number(item.total)||0)),year:String(item.year||""),cover:String(item.cover||""),synopsis:String(item.synopsis||""),score:item.score==null?null:Number(item.score)||null,genres:Array.isArray(item.genres)?item.genres:[],source:String(item.source||""),external_id:Number(item.externalId)||null,favorite:item.favorite===true,watch_later:item.watchLater===true,metadata};
+  return {user_id:currentUser.id,item_id:String(item.id||crypto.randomUUID()),title:String(item.title||"Sans titre"),type:["Anime","Manga","Manhwa","Webtoon"].includes(item.type)?item.type:"Anime",status:["À commencer","En cours","En pause","Terminé","Abandonné"].includes(item.status)?item.status:"À commencer",progress:Math.max(0,Math.floor(Number(item.progress)||0)),total:Math.max(0,Math.floor(Number(item.total)||0)),year:String(item.year||""),cover:String(item.cover||""),synopsis:String(item.synopsis||""),score:item.score==null?null:Number(item.score)||null,genres:Array.isArray(item.genres)?item.genres:[],source:String(item.source||""),external_id:Number(item.externalId)||null,favorite:item.favorite===true,watch_later:item.watchLater===true,updated_at:new Date().toISOString(),metadata};
 }
 function queueCloudSync(){cloudSyncQueue=cloudSyncQueue.then(syncCloudLibrary).catch(error=>{console.error("AniTrack sync:",error);toast("Synchronisation impossible. Tes données restent sauvegardées sur cet appareil.")})}
 async function syncCloudLibrary(){
@@ -247,7 +247,7 @@ function handleAuthSession(session){
 function initAuth(){
   updateAccountUI();
   if(!supabaseClient){$("#accountButton").disabled=true;$("#accountButton").textContent="Compte indisponible";return;}
-  supabaseClient.auth.onAuthStateChange((event,session)=>{setTimeout(()=>{if(event==="PASSWORD_RECOVERY"){currentUser=session?.user||currentUser;showAuth("password");return;}handleAuthSession(session)},0)});
+  supabaseClient.auth.onAuthStateChange((event,session)=>{setTimeout(()=>{if(event==="PASSWORD_RECOVERY"){handleAuthSession(session);showAuth("password");return;}handleAuthSession(session)},0)});
 }
 
 const CATALOG_KEY="anitrack_catalog_cache_v1";let catalogCache={};try{catalogCache=JSON.parse(localStorage.getItem(CATALOG_KEY)||"{}")||{}}catch(e){}let activeCatalog="anime",activeCatalogSort="popular",catalogLoading=false;
