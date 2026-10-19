@@ -225,7 +225,7 @@ function fromMangaDex(item) {
   const title = a.title?.en || Object.values(a.title || {})[0] || "";
   const coverRel = (item.relationships || []).find(r => r.type === "cover_art");
   const filename = coverRel?.attributes?.fileName;
-  const cover = filename ? `https://uploads.mangadex.org/covers/${item.id}/${encodeURIComponent(filename)}.512.jpg` : FALLBACK_COVER;
+  const cover = filename ? `https://uploads.mangadex.org/covers/${item.id}/${encodeURIComponent(filename)}.256.jpg` : FALLBACK_COVER;
   const malId = Number(a.links?.mal) || Number(a.links?.anilist) || 0;
   const tagNames = (a.tags || []).map(t => String(t.attributes?.name?.en || "").toLowerCase());
   const isKorean = String(a.originalLanguage || "").toLowerCase() === "ko";
