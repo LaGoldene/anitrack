@@ -274,7 +274,7 @@ try {
   // Les collections sont paginées et une erreur conserve les pages déjà récupérées.
   const anilistAnime = await fetchAniListCollection("Anime");
   const anilistManga = await fetchAniListCollection("Manga", { country: "JP", format: "MANGA" });
-  const anilistManhwa = await fetchAniListCollection("Manhwa", { country: "KR" });
+  const anilistManhwa = await fetchAniListCollection("Manhwa", { country: "KR", format: "MANGA" });
   const anilistWebtoon = await fetchAniListCollection("Webtoon", { format: "WEBTOON" });
   if (anilistAnime.length) animeRows = unique([...anilistAnime, ...animeRows]);
   const mangaDexRows = [...anilistManga, ...anilistManhwa, ...anilistWebtoon];
