@@ -292,10 +292,10 @@ try {
     console.log("MangaDex général :", generalRows.length, "fiches.");
   } catch (error) { console.warn("MangaDex général indisponible :", String(error)); }
   try {
-    const tags = await getJson("https://api.mangadex.org/manga/tag", 20000);
-    const longStripTag = (tags.data || []).find(tag => String(tag.attributes?.name?.en || "").trim().toLowerCase() === "long strip");
     koreanRows = await fetchMangaDexCollection({ language: "ko" }, 3000, "Manhwa");
     console.log("MangaDex coréen :", koreanRows.length, "fiches.");
+    const tags = await getJson("https://api.mangadex.org/manga/tag", 20000);
+    const longStripTag = (tags.data || []).find(tag => String(tag.attributes?.name?.en || "").trim().toLowerCase() === "long strip");
     if (longStripTag?.id) {
       longStripRows = await fetchMangaDexCollection({ tagId: longStripTag.id }, 3000, "Webtoon");
       console.log("MangaDex Long Strip :", longStripRows.length, "fiches.");
