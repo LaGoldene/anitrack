@@ -151,7 +151,7 @@ $$("[data-color]").forEach(b=>b.onclick=()=>{prefs.accent=b.dataset.color;$$("[d
 let currentUser=null,cloudReady=false,cloudItemIds=new Set(),cloudSyncQueue=Promise.resolve(),authMode="signin";
 function updateAccountUI(){
   const email=currentUser?.email||"";
-  $(".account-avatar").forEach(el=>{el.textContent=email?email.trim().slice(0,1).toUpperCase():"A";el.title=email||"AniTrack"});
+  $$(".account-avatar").forEach(el=>{el.textContent=email?email.trim().slice(0,1).toUpperCase():"A";el.title=email||"AniTrack"});
   $("#accountButton").textContent=email?"Mon compte":"Se connecter";
   $("#accountName").textContent=email?email.split("@")[0]:"Mon espace";
   $("#accountState").textContent=email?"Compte synchronisé":"Mode local";
