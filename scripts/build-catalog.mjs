@@ -75,17 +75,6 @@ function malRow(row, category, imageMap = new Map()) {
     source: "Catalogue statique"
   });
 }
-function parseCsvLine(line) {
-  const out = []; let value = ""; let quoted = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"' && quoted && line[i + 1] === '"') { value += '"'; i++; }
-    else if (ch === '"') quoted = !quoted;
-    else if (ch === "," && !quoted) { out.push(value); value = ""; }
-    else value += ch;
-  }
-  out.push(value); return out;
-}
 async function fetchAnimeImageMap() {
   const response = await fetch("https://raw.githubusercontent.com/meesvandongen/anime-dataset/main/data/anime.csv", { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error("anime.csv HTTP " + response.status);
