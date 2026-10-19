@@ -94,14 +94,27 @@ async function fetchAnimeImageMap() {
   console.log("Images d’animes chargées :", map.size);
   return map;
 }
-async function fetchMangaDexPage(offset) {
+async function fetchMangaDexPage(offset, filters = {}) {
   const url = new URL(MANGADEX);
   url.searchParams.set("limit", "100");
   url.searchParams.set("offset", String(offset));
   url.searchParams.append("includes[]", "cover_art");
   url.searchParams.append("contentRating[]", "safe");
   url.searchParams.set("order[followedCount]", "desc");
-  return getJson(url.toString(), 12000);
+  if (filters.language) url.searchParams.append("originalLanguage[]", filters.language);
+  if (filters.tagId) url.searchParams.append("includedTags[]", filters.tagId);
+  return getJson(url.toString(), 20000);
+}
+async function fetchMangaDexCollection(filters = {}, max = MAX_PER_CATEGORY) {
+  const rows = [];
+  for (let offset = 0; offset < max; offset += 100) {
+    const page = await fetchMangaDexPage(offset, filters);
+    const items = page.data || [];
+    rows.push(...items.map(fromMangaDex).filter(x => x?.title));
+    if (items.length < 100 || offset + 100 >= Number(page.total || 0)) break;
+    await pause(900);
+  }
+  return rows;
 }
 function fromMangaDex(item) {
   const a = item.attributes || {};
@@ -160,20 +173,33 @@ try {
   console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas, ${sourceManhwa.length} manhwas, ${sourceWebtoon.length} webtoons.`);
   console.log("Types source manga :", JSON.stringify(typeCounts));
 
-  // MangaDex fournit les couvertures et identifie les œuvres coréennes/webtoon.
-  for (let offset = 0; offset < 1500; offset += 100) {
-    try {
-      const page = await fetchMangaDexPage(offset);
-      const items = page.data || [];
-      mangaDexRows.push(...items.map(fromMangaDex).filter(x => x?.title));
-      if (items.length < 100 || offset + 100 >= Number(page.total || 0)) break;
-      await pause(1200);
-    } catch (error) {
-      console.warn("MangaDex interrompu à offset " + offset + " :", String(error));
-      break;
-    }
+  // Récupération séparée : la liste générale ne contient pas assez de manhwas/webtoons.
+  try {
+    mangaDexRows = await fetchMangaDexCollection({}, 1500);
+    console.log("MangaDex général :", mangaDexRows.length, "fiches.");
+  } catch (error) {
+    console.warn("MangaDex général interrompu :", String(error));
   }
-  console.log("MangaDex : " + mangaDexRows.length + " fiches récupérées.");
+  try {
+    const tagResponse = await getJson("https://api.mangadex.org/manga/tag", 20000);
+    const longStripTag = (tagResponse.data || []).find(tag =>
+      String(tag.attributes?.name?.en || "").trim().toLowerCase() === "long strip"
+    );
+    const koreanRows = await fetchMangaDexCollection({ language: "ko" }, 1500);
+    mangaDexRows.push(...koreanRows);
+    console.log("MangaDex langue coréenne :", koreanRows.length, "fiches.");
+    if (longStripTag?.id) {
+      const webtoonRows = await fetchMangaDexCollection({ tagId: longStripTag.id }, 1500);
+      mangaDexRows.push(...webtoonRows);
+      console.log("MangaDex format Long Strip :", webtoonRows.length, "fiches.");
+    } else {
+      console.warn("Tag MangaDex Long Strip introuvable ; récupération webtoon dédiée impossible.");
+    }
+  } catch (error) {
+    console.warn("Récupération dédiée manhwa/webtoon interrompue :", String(error));
+  }
+  mangaDexRows = unique(mangaDexRows);
+  console.log("MangaDex total unique :", mangaDexRows.length, "fiches.");
   sourceOk = animeRows.length > 100 && mangaSeedRows.length > 100;
   // Keep the broad MAL list but replace matching titles with MangaDex covers where possible.
   const coverByMal = new Map(mangaDexRows.filter(x => x.externalId).map(x => [String(x.externalId), x]));
