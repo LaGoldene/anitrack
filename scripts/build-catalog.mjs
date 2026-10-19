@@ -1,7 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 
 const LISTS = "https://raw.githubusercontent.com/anime-and-manga/lists/main";
-const ANIME_CSV = "https://raw.githubusercontent.com/meesvandongen/anime-dataset/main/data/anime.csv";
 const MANGADEX = "https://api.mangadex.org/manga";
 const MAX_PER_CATEGORY = 1500;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -63,47 +62,15 @@ function parseCsvLine(line) {
   }
   out.push(value); return out;
 }
-async function fetchAnimeImageMap() {
-  const response = await fetch(ANIME_CSV, { signal: AbortSignal.timeout(60000) });
-  if (!response.ok) throw new Error("anime.csv HTTP " + response.status);
-  const csv = await response.text();
-  const lines = csv.split(/\r?\n/);
-  const headers = parseCsvLine(lines[0]).map(x => x.trim().toLowerCase());
-  const idIndex = headers.findIndex(x => x === "id" || x === "mal_id" || x === "anime_id");
-  const imageIndex = headers.findIndex(x => ["image", "picture", "main_picture", "image_url", "picture_url"].includes(x));
-  const titleIndex = headers.findIndex(x => x === "title" || x === "title_english");
-  const yearIndex = headers.findIndex(x => ["year", "start_year"].includes(x));
-  const scoreIndex = headers.findIndex(x => ["mean", "score", "rating"].includes(x));
-  const map = new Map();
-  if (idIndex < 0 || imageIndex < 0) {
-    console.warn("Colonnes d'images non reconnues dans anime.csv :", headers.slice(0, 15).join(","));
-    return map;
-  }
-  for (const line of lines.slice(1)) {
-    if (!line) continue;
-    const row = parseCsvLine(line);
-    const id = Number(row[idIndex]);
-    let image = String(row[imageIndex] || "").trim();
-    if (!id || !image) continue;
-    if (/^https?:\/\//i.test(image)) { /* full image URL */ }
-    else image = `https://cdn.myanimelist.net/images/anime/${image}.jpg`;
-    map.set(id, { cover: image, title: row[titleIndex] || "", year: row[yearIndex] || "", score: row[scoreIndex] || null });
-  }
-  console.log("Images anime trouvées dans le dataset :", map.size);
-  return map;
-}
-function malRow(row, category, imageMap = new Map()) {
+function malRow(row, category) {
   const id = Number(row.idMal);
   const title = titleOf(row);
   if (!id || !title) return null;
-  const image = imageMap.get(id);
   return makeRow({
     id,
     title,
     type: category === "anime" ? "Anime" : "Manga",
-    cover: image?.cover || FALLBACK_COVER,
-    year: image?.year || "",
-    score: image?.score,
+    cover: FALLBACK_COVER,
     source: "Catalogue statique"
   });
 }
@@ -114,7 +81,7 @@ async function fetchMangaDexPage(offset) {
   url.searchParams.append("includes[]", "cover_art");
   url.searchParams.append("contentRating[]", "safe");
   url.searchParams.set("order[followedCount]", "desc");
-  return getJson(url.toString(), 30000);
+  return getJson(url.toString(), 12000);
 }
 function fromMangaDex(item) {
   const a = item.attributes || {};
@@ -149,14 +116,13 @@ let sourceOk = false;
 let animeRows = [];
 let mangaDexRows = [];
 try {
-  const [animeData, mangaData, imageMap] = await Promise.all([
+  const [animeData, mangaData] = await Promise.all([
     fetchDataset("anime-full.json"),
-    fetchDataset("manga-full.json"),
-    fetchAnimeImageMap().catch(error => { console.warn("Images anime indisponibles :", String(error)); return new Map(); })
+    fetchDataset("manga-full.json")
   ]);
   animeRows = unique(animeData
     .filter(row => Number(row.idMal) > 0 && titleOf(row))
-    .map(row => malRow(row, "anime", imageMap))
+    .map(row => malRow(row, "anime"))
     .filter(Boolean));
   const mangaSeedRows = unique(mangaData
     .filter(row => Number(row.idMal) > 0 && titleOf(row))
@@ -165,7 +131,7 @@ try {
   console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas.`);
 
   // MangaDex fournit les couvertures et identifie les œuvres coréennes/webtoon.
-  for (let offset = 0; offset < 3000; offset += 100) {
+  for (let offset = 0; offset < 1500; offset += 100) {
     try {
       const page = await fetchMangaDexPage(offset);
       const items = page.data || [];
