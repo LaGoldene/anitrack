@@ -45,17 +45,12 @@ function normalize(row, category) {
   };
 }
 
-function mergeUnique(seedRows, rows, category) {
+function mergeUnique(seedRows, rows) {
   const merged = new Map();
   for (const row of [...(Array.isArray(seedRows) ? seedRows : []), ...rows]) {
     if (!row || !row.externalId || !row.title) continue;
-    const normalized = row.source === "Catalogue statique" ? row : normalize({
-      idMal: row.externalId,
-      title: { english: row.title },
-      type: row.type
-    }, category) || row;
-    const key = String(normalized.externalId);
-    if (!merged.has(key)) merged.set(key, normalized);
+    const key = String(row.externalId);
+    if (!merged.has(key)) merged.set(key, row);
   }
   return [...merged.values()];
 }
@@ -78,9 +73,14 @@ try {
   const anime = mapRows(animeRows, "anime");
   const manga = mapRows(mangaRows, "manga");
   const manhwa = mangaRows
-    .filter(row => ["MANHWA", "WEBTOON"].includes(String(row.type || "").toUpperCase()))
+    .filter(row => String(row.type || "").toUpperCase() === "MANHWA")
     .sort((a, b) => Number(b.idMal) - Number(a.idMal))
-    .map(row => normalize(row, String(row.type).toUpperCase() === "WEBTOON" ? "webtoon" : "manhwa"))
+    .map(row => normalize(row, "manhwa"))
+    .filter(Boolean);
+  const webtoons = mangaRows
+    .filter(row => String(row.type || "").toUpperCase() === "WEBTOON")
+    .sort((a, b) => Number(b.idMal) - Number(a.idMal))
+    .map(row => normalize(row, "webtoon"))
     .filter(Boolean);
 
   const seedAnime = catalog["anime:popular"] || catalog.anime || [];
@@ -88,25 +88,25 @@ try {
   const seedManhwa = catalog["manhwa:popular"] || catalog.manhwa || [];
   const seedWebtoon = catalog["webtoon:popular"] || catalog.webtoon || [];
 
-  catalog["anime:popular"] = mergeUnique(seedAnime, anime, "anime").slice(0, MAX_PER_CATEGORY);
-  catalog["anime:new"] = mergeUnique(catalog["anime:new"] || [], anime, "anime")
+  catalog["anime:popular"] = mergeUnique(seedAnime, anime).slice(0, MAX_PER_CATEGORY);
+  catalog["anime:new"] = mergeUnique(catalog["anime:new"] || [], anime)
     .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
   catalog.anime = catalog["anime:popular"];
 
-  catalog["manga:popular"] = mergeUnique(seedManga, manga, "manga").slice(0, MAX_PER_CATEGORY);
-  catalog["manga:new"] = mergeUnique(catalog["manga:new"] || [], manga, "manga")
+  catalog["manga:popular"] = mergeUnique(seedManga, manga).slice(0, MAX_PER_CATEGORY);
+  catalog["manga:new"] = mergeUnique(catalog["manga:new"] || [], manga)
     .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
   catalog.manga = catalog["manga:popular"];
 
   if (manhwa.length) {
-    catalog["manhwa:popular"] = mergeUnique(seedManhwa, manhwa, "manhwa").slice(0, MAX_PER_CATEGORY);
-    catalog["manhwa:new"] = mergeUnique(catalog["manhwa:new"] || [], manhwa, "manhwa")
+    catalog["manhwa:popular"] = mergeUnique(seedManhwa, manhwa).slice(0, MAX_PER_CATEGORY);
+    catalog["manhwa:new"] = mergeUnique(catalog["manhwa:new"] || [], manhwa)
       .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
     catalog.manhwa = catalog["manhwa:popular"];
   }
-  if (manhwa.length) {
-    catalog["webtoon:popular"] = mergeUnique(seedWebtoon, manhwa.filter(x => x.type === "Webtoon"), "webtoon").slice(0, MAX_PER_CATEGORY);
-    catalog["webtoon:new"] = mergeUnique(catalog["webtoon:new"] || [], manhwa.filter(x => x.type === "Webtoon"), "webtoon")
+  if (webtoons.length) {
+    catalog["webtoon:popular"] = mergeUnique(seedWebtoon, webtoons).slice(0, MAX_PER_CATEGORY);
+    catalog["webtoon:new"] = mergeUnique(catalog["webtoon:new"] || [], webtoons)
       .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
     catalog.webtoon = catalog["webtoon:popular"];
   }
