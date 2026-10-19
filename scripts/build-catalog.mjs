@@ -1,63 +1,130 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
-const categories = ["anime", "manga", "manhwa", "webtoon"];
-const sorts = ["popular", "new"];
-const catalog = {};
+const SOURCE = "https://raw.githubusercontent.com/anime-and-manga/lists/main";
+const MAX_PER_CATEGORY = 1500;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-function mapEntry(a, type) {
+async function readSeed() {
+  try { return JSON.parse(await readFile("catalog.json", "utf8")); }
+  catch { return { updatedAt: "", catalog: {} }; }
+}
+
+async function fetchDataset(path) {
+  const response = await fetch(`${SOURCE}/${path}`, { signal: AbortSignal.timeout(45000), headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+  const data = await response.json();
+  if (!Array.isArray(data)) throw new Error(`${path}: format JSON inattendu`);
+  return data;
+}
+
+function titleOf(row) {
+  const titles = row.titles || {};
+  return String(titles.english || titles.romaji || titles.native || "").trim();
+}
+
+function normalize(row, category) {
+  const externalId = Number(row.idMal);
+  const title = titleOf(row);
+  if (!externalId || !title) return null;
+  const rawType = String(row.type || "").toUpperCase();
+  const type = category === "anime" ? "Anime" : rawType === "MANHWA" ? "Manhwa" : rawType === "WEBTOON" ? "Webtoon" : "Manga";
   return {
-    id: "jikan-" + type + "-" + a.mal_id,
-    externalId: a.mal_id,
-    title: a.title_english || a.title || a.title_japanese || "Sans titre",
-    type: type === "anime" ? "Anime" : type === "manhwa" ? "Manhwa" : type === "webtoon" ? "Webtoon" : "Manga",
-    total: type === "anime" ? (a.episodes || 0) : (a.chapters || 0),
+    id: `jikan-${category}-${externalId}`,
+    externalId,
+    title,
+    type,
+    total: 0,
     progress: 0,
     status: "À commencer",
-    cover: a.images?.jpg?.large_image_url || a.images?.jpg?.image_url || "",
-    year: a.year || a.published?.from?.slice(0, 4) || "",
-    synopsis: a.synopsis || "",
-    score: a.score || null,
-    genres: (a.genres || []).map(g => g.name),
-    source: "Jikan"
+    cover: "",
+    year: "",
+    synopsis: "",
+    score: null,
+    genres: [],
+    source: "Catalogue statique"
   };
 }
 
-async function fetchCategory(type, sortMode) {
-  const base = type === "anime" ? "anime" : "manga";
-  const order = sortMode === "new" ? "start_date" : "members";
-  const params = new URLSearchParams({ limit: "24", page: "1", sfw: "true", order_by: order, sort: "desc" });
-  if (type === "manhwa" || type === "webtoon") params.set("type", "manhwa");
-  const url = `https://api.jikan.moe/v4/${base}?${params}`;
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "AniTrack-Catalog-Builder" } });
-      if (response.status === 429 || response.status >= 500) throw new Error(`Jikan HTTP ${response.status}`);
-      if (!response.ok) throw new Error(`Jikan HTTP ${response.status}`);
-      const body = await response.json();
-      if (!Array.isArray(body.data)) throw new Error("Réponse Jikan invalide");
-      return body.data.map(item => mapEntry(item, type));
-    } catch (error) {
-      lastError = error;
-      if (attempt < 2) await pause(1800 * (attempt + 1));
-    }
+function mergeUnique(seedRows, rows, category) {
+  const merged = new Map();
+  for (const row of [...(Array.isArray(seedRows) ? seedRows : []), ...rows]) {
+    if (!row || !row.externalId || !row.title) continue;
+    const normalized = row.source === "Catalogue statique" ? row : normalize({
+      idMal: row.externalId,
+      title: { english: row.title },
+      type: row.type
+    }, category) || row;
+    const key = String(normalized.externalId);
+    if (!merged.has(key)) merged.set(key, normalized);
   }
-  console.warn(`Impossible de précharger ${type}:${sortMode}:`, String(lastError));
-  return [];
+  return [...merged.values()];
 }
 
-for (const type of categories) {
-  for (const sortMode of sorts) {
-    catalog[`${type}:${sortMode}`] = await fetchCategory(type, sortMode);
-    await pause(1300);
+const seed = await readSeed();
+const catalog = { ...(seed.catalog || {}) };
+let sourceOk = false;
+try {
+  const [animeRows, mangaRows] = await Promise.all([
+    fetchDataset("anime-full.json"),
+    fetchDataset("manga-full.json")
+  ]);
+
+  const mapRows = (rows, category) => rows
+    .filter(row => Number(row.idMal) > 0 && titleOf(row))
+    .sort((a, b) => Number(b.idMal) - Number(a.idMal))
+    .map(row => normalize(row, category))
+    .filter(Boolean);
+
+  const anime = mapRows(animeRows, "anime");
+  const manga = mapRows(mangaRows, "manga");
+  const manhwa = mangaRows
+    .filter(row => ["MANHWA", "WEBTOON"].includes(String(row.type || "").toUpperCase()))
+    .sort((a, b) => Number(b.idMal) - Number(a.idMal))
+    .map(row => normalize(row, String(row.type).toUpperCase() === "WEBTOON" ? "webtoon" : "manhwa"))
+    .filter(Boolean);
+
+  const seedAnime = catalog["anime:popular"] || catalog.anime || [];
+  const seedManga = catalog["manga:popular"] || catalog.manga || [];
+  const seedManhwa = catalog["manhwa:popular"] || catalog.manhwa || [];
+  const seedWebtoon = catalog["webtoon:popular"] || catalog.webtoon || [];
+
+  catalog["anime:popular"] = mergeUnique(seedAnime, anime, "anime").slice(0, MAX_PER_CATEGORY);
+  catalog["anime:new"] = mergeUnique(catalog["anime:new"] || [], anime, "anime")
+    .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
+  catalog.anime = catalog["anime:popular"];
+
+  catalog["manga:popular"] = mergeUnique(seedManga, manga, "manga").slice(0, MAX_PER_CATEGORY);
+  catalog["manga:new"] = mergeUnique(catalog["manga:new"] || [], manga, "manga")
+    .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
+  catalog.manga = catalog["manga:popular"];
+
+  if (manhwa.length) {
+    catalog["manhwa:popular"] = mergeUnique(seedManhwa, manhwa, "manhwa").slice(0, MAX_PER_CATEGORY);
+    catalog["manhwa:new"] = mergeUnique(catalog["manhwa:new"] || [], manhwa, "manhwa")
+      .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
+    catalog.manhwa = catalog["manhwa:popular"];
   }
+  if (manhwa.length) {
+    catalog["webtoon:popular"] = mergeUnique(seedWebtoon, manhwa.filter(x => x.type === "Webtoon"), "webtoon").slice(0, MAX_PER_CATEGORY);
+    catalog["webtoon:new"] = mergeUnique(catalog["webtoon:new"] || [], manhwa.filter(x => x.type === "Webtoon"), "webtoon")
+      .sort((a, b) => Number(b.externalId) - Number(a.externalId)).slice(0, MAX_PER_CATEGORY);
+    catalog.webtoon = catalog["webtoon:popular"];
+  }
+  sourceOk = true;
+  console.log(`Source chargée : ${animeRows.length} animes, ${mangaRows.length} mangas.`);
+} catch (error) {
+  console.warn("Source distante indisponible ; conservation du catalogue déjà versionné :", String(error));
 }
 
-await mkdir("data", { recursive: true });
-await writeFile("catalog.json", JSON.stringify({ updatedAt: new Date().toISOString(), catalog }, null, 2) + "\n", "utf8");
-const counts = Object.fromEntries(Object.entries(catalog).map(([key, rows]) => [key, rows.length]));
-console.log("Catalogue statique généré :", JSON.stringify(counts));
-if (!Object.values(catalog).some(rows => rows.length > 0)) {
-  throw new Error("Aucune œuvre n'a pu être récupérée ; arrêt du déploiement pour éviter de publier un catalogue vide.");
+const counts = Object.fromEntries(Object.entries(catalog)
+  .filter(([key, value]) => key.includes(":") && Array.isArray(value))
+  .map(([key, value]) => [key, value.length]));
+await writeFile("catalog.json", JSON.stringify({
+  updatedAt: new Date().toISOString(),
+  catalog,
+  source: sourceOk ? "anime-and-manga/lists" : "catalogue versionné de secours"
+}) + "\n", "utf8");
+console.log("Catalogue statique prêt :", JSON.stringify(counts));
+if (!Object.values(catalog).some(value => Array.isArray(value) && value.length > 0)) {
+  throw new Error("Le catalogue statique est vide.");
 }
