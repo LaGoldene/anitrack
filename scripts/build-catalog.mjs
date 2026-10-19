@@ -20,11 +20,101 @@ async function fetchDataset(path) {
   if (!Array.isArray(data)) throw new Error(path + ": format JSON inattendu");
   return data;
 }
+
+const ANILIST = "https://graphql.anilist.co";
+async function fetchAniListPage(type, page, filters = {}) {
+  const query = `query ($page: Int, $type: MediaType, $country: CountryCode, $format: MediaFormat) {
+    Page(page: $page, perPage: 50) {
+      pageInfo { hasNextPage total }
+      media(type: $type, countryOfOrigin: $country, format: $format, sort: POPULARITY_DESC, isAdult: false) {
+        id idMal type format countryOfOrigin
+        title { english romaji native }
+        description(asHtml: false)
+        coverImage { extraLarge large }
+        startDate { year }
+        episodes chapters volumes averageScore genres status
+      }
+    }
+  }`;
+  const variables = { page, type, country: filters.country || null, format: filters.format || null };
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const response = await fetch(ANILIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(30000)
+      });
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error("AniList HTTP " + response.status);
+        await pause(2500 * (attempt + 1));
+        continue;
+      }
+      if (!response.ok) throw new Error("AniList HTTP " + response.status);
+      const payload = await response.json();
+      if (payload.errors?.length) throw new Error("AniList GraphQL : " + payload.errors.map(x => x.message).join("; "));
+      return payload.data?.Page || { media: [], pageInfo: { hasNextPage: false } };
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await pause(1500 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error("AniList indisponible");
+}
+function fromAniList(item, category) {
+  const titles = item.title || {};
+  const title = titles.english || titles.romaji || titles.native || "";
+  const altTitle = [...new Set([titles.romaji, titles.native, titles.english].filter(Boolean).filter(x => x !== title))].join(" · ");
+  const id = Number(item.idMal) || Number(item.id);
+  const cover = item.coverImage?.extraLarge || item.coverImage?.large || FALLBACK_COVER;
+  const total = category === "Anime" ? item.episodes : item.chapters;
+  return {
+    ...makeRow({
+      id,
+      title,
+      type: category,
+      cover,
+      year: item.startDate?.year || "",
+      synopsis: item.description || "",
+      score: item.averageScore == null ? null : Number((item.averageScore / 10).toFixed(1)),
+      total: total || 0,
+      genres: item.genres || [],
+      source: "AniList",
+      altTitle,
+      format: item.format || "",
+      publicationStatus: item.status || "",
+      volumes: item.volumes || 0,
+      countryOfOrigin: item.countryOfOrigin || ""
+    }),
+    externalId: id,
+    anilistId: item.id,
+    malId: item.idMal || null
+  };
+}
+async function fetchAniListCollection(category, filters = {}, max = MAX_PER_CATEGORY) {
+  const rows = [];
+  const maxPages = Math.ceil(max / 50);
+  for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
+    try {
+      const page = await fetchAniListPage(category === "Anime" ? "ANIME" : "MANGA", pageNo, filters);
+      const items = page.media || [];
+      rows.push(...items.map(item => fromAniList(item, category)).filter(row => row?.title));
+      console.log("AniList", category, "page", pageNo, ":", items.length, "fiches.");
+      if (!page.pageInfo?.hasNextPage || items.length === 0) break;
+    } catch (error) {
+      console.warn("AniList", category, "interrompu page", pageNo, ":", String(error), "—", rows.length, "fiches conservées.");
+      break;
+    }
+    if (pageNo < maxPages) await pause(850);
+  }
+  return unique(rows).slice(0, max);
+}
 function titleOf(row) {
   const titles = row.titles || {};
   return String(titles.english || titles.romaji || titles.native || "").trim();
 }
-function makeRow({ id, title, type, cover, year = "", synopsis = "", score = null, total = 0, genres = [], source = "Catalogue statique" }) {
+function makeRow({ id, title, type, cover, year = "", synopsis = "", score = null, total = 0, genres = [], source = "Catalogue statique", altTitle = "", format = "", publicationStatus = "", volumes = 0, countryOfOrigin = "" }) {
   if (!id || !title) return null;
   return {
     id: `catalog-${type.toLowerCase()}-${id}`,
@@ -39,7 +129,12 @@ function makeRow({ id, title, type, cover, year = "", synopsis = "", score = nul
     synopsis: String(synopsis || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200),
     score: score == null ? null : Number(score),
     genres: Array.isArray(genres) ? genres : [],
-    source
+    source,
+    altTitle: String(altTitle || "").trim(),
+    format: String(format || "").trim(),
+    publicationStatus: String(publicationStatus || "").trim(),
+    volumes: Number(volumes) || 0,
+    countryOfOrigin: String(countryOfOrigin || "").trim()
   };
 }
 function unique(rows) {
@@ -175,46 +270,25 @@ try {
   console.log(`Source de titres : ${animeRows.length} animes, ${mangaSeedRows.length} mangas, ${sourceManhwa.length} manhwas, ${sourceWebtoon.length} webtoons.`);
   console.log("Types source manga :", JSON.stringify(typeCounts));
 
-  // Chaque format est récupéré séparément afin que les doublons de la recherche générale
-  // ne fassent pas disparaître les manhwas et webtoons. Les fiches MangaDex gardent leurs couvertures.
-  let generalRows = [];
-  let koreanRows = [];
-  let longStripRows = [];
-  try {
-    generalRows = await fetchMangaDexCollection({}, 3000);
-    console.log("MangaDex général :", generalRows.length, "fiches.");
-  } catch (error) {
-    console.warn("MangaDex général interrompu :", String(error));
-  }
-  try {
-    const tagResponse = await getJson("https://api.mangadex.org/manga/tag", 20000);
-    const longStripTag = (tagResponse.data || []).find(tag =>
-      String(tag.attributes?.name?.en || "").trim().toLowerCase() === "long strip"
-    );
-    koreanRows = await fetchMangaDexCollection({ language: "ko" }, 3000, "Manhwa");
-    console.log("MangaDex langue coréenne / manhwa :", koreanRows.length, "fiches.");
-    if (longStripTag?.id) {
-      longStripRows = await fetchMangaDexCollection({ tagId: longStripTag.id }, 3000, "Webtoon");
-      console.log("MangaDex format Long Strip / webtoon :", longStripRows.length, "fiches.");
-    } else {
-      console.warn("Tag MangaDex Long Strip introuvable ; récupération webtoon dédiée impossible.");
-    }
-  } catch (error) {
-    console.warn("Récupération dédiée manhwa/webtoon interrompue :", String(error));
-  }
-  const mangaDexRows = unique([...generalRows, ...koreanRows, ...longStripRows]);
-  const mangaDexByTitle = new Map(mangaDexRows.map(row => [row.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""), row]));
+  // AniList fournit les fiches complètes (synopsis, genres, couverture, score, année et format).
+  // Les collections sont paginées et une erreur conserve les pages déjà récupérées.
+  const anilistAnime = await fetchAniListCollection("Anime");
+  const anilistManga = await fetchAniListCollection("Manga", { country: "JP", format: "MANGA" });
+  const anilistManhwa = await fetchAniListCollection("Manhwa", { country: "KR" });
+  const anilistWebtoon = await fetchAniListCollection("Webtoon", { format: "WEBTOON" });
+  if (anilistAnime.length) animeRows = unique([...anilistAnime, ...animeRows]);
+  const mangaDexRows = [...anilistManga, ...anilistManhwa, ...anilistWebtoon];
+  const normalizeTitle = title => String(title || "").toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+  const anilistByTitle = new Map(mangaDexRows.map(row => [normalizeTitle(row.title), row]));
   const withMangaDexCover = row => {
-    const key = row.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-    const found = mangaDexByTitle.get(key);
-    return found ? { ...row, cover: found.cover || row.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres?.length ? found.genres : row.genres, source: "MangaDex + catalogue statique" } : row;
+    const found = anilistByTitle.get(normalizeTitle(row.title));
+    return found ? { ...row, ...found, id: row.id, externalId: row.externalId, progress: row.progress || 0, status: row.status || "À commencer", source: "AniList + catalogue statique" } : row;
   };
-  const manhwaRows = unique([...koreanRows, ...sourceManhwa.map(withMangaDexCover)]);
-  const webtoonRows = unique([...longStripRows, ...sourceWebtoon.map(withMangaDexCover)]);
-  const otherMangaDex = unique(generalRows.filter(x => x.type === "Manga"));
-  console.log("MangaDex total unique :", mangaDexRows.length, "fiches.");
+  const manhwaRows = unique([...anilistManhwa, ...sourceManhwa.map(withMangaDexCover)]);
+  const webtoonRows = unique([...anilistWebtoon, ...sourceWebtoon.map(withMangaDexCover)]);
+  const otherMangaDex = unique([...anilistManga, ...mangaSeedRows.map(withMangaDexCover)]);
+  console.log("AniList total :", JSON.stringify({ anime: anilistAnime.length, manga: anilistManga.length, manhwa: anilistManhwa.length, webtoon: anilistWebtoon.length }));
   sourceOk = animeRows.length > 100 && mangaSeedRows.length > 100;
-  const mangaRows = mangaSeedRows.map(withMangaDexCover);
   const seedManhwa = seedCatalog["manhwa:popular"] || seedCatalog.manhwa || [];
   const seedWebtoon = seedCatalog["webtoon:popular"] || seedCatalog.webtoon || [];
   const seedManga = seedCatalog["manga:popular"] || seedCatalog.manga || [];
@@ -229,12 +303,12 @@ try {
   });
   const popularAnime = unique([...animeRows, ...coverSeed(seedAnime, "Anime")]).slice(0, MAX_PER_CATEGORY);
   const newAnime = unique([...animeRows.slice().reverse(), ...coverSeed(seedCatalog["anime:new"] || [], "Anime")]).slice(0, MAX_PER_CATEGORY);
-  const popularManga = unique([...otherMangaDex, ...mangaRows.map(withMangaDexCover), ...coverSeed(seedManga, "Manga")]).slice(0, MAX_PER_CATEGORY);
-  const newManga = unique([...otherMangaDex.slice().reverse(), ...mangaRows.slice().reverse().map(withMangaDexCover), ...coverSeed(seedCatalog["manga:new"] || [], "Manga")]).slice(0, MAX_PER_CATEGORY);
-  const popularManhwa = unique([...manhwaRows, ...coverSeed(seedManhwa, "Manhwa")]).slice(0, MAX_PER_CATEGORY);
-  const newManhwa = unique([...manhwaRows.slice().reverse(), ...coverSeed(seedCatalog["manhwa:new"] || [], "Manhwa")]).slice(0, MAX_PER_CATEGORY);
-  const popularWebtoon = unique([...webtoonRows, ...coverSeed(seedWebtoon, "Webtoon")]).slice(0, MAX_PER_CATEGORY);
-  const newWebtoon = unique([...webtoonRows.slice().reverse(), ...coverSeed(seedCatalog["webtoon:new"] || [], "Webtoon")]).slice(0, MAX_PER_CATEGORY);
+  const popularManga = unique([...anilistManga, ...otherMangaDex, ...mangaRows.map(withMangaDexCover), ...coverSeed(seedManga, "Manga")]).slice(0, MAX_PER_CATEGORY);
+  const newManga = unique([...anilistManga.slice().reverse(), ...otherMangaDex.slice().reverse(), ...mangaRows.slice().reverse().map(withMangaDexCover), ...coverSeed(seedCatalog["manga:new"] || [], "Manga")]).slice(0, MAX_PER_CATEGORY);
+  const popularManhwa = unique([...anilistManhwa, ...manhwaRows, ...coverSeed(seedManhwa, "Manhwa")]).slice(0, MAX_PER_CATEGORY);
+  const newManhwa = unique([...anilistManhwa.slice().reverse(), ...manhwaRows.slice().reverse(), ...coverSeed(seedCatalog["manhwa:new"] || [], "Manhwa")]).slice(0, MAX_PER_CATEGORY);
+  const popularWebtoon = unique([...anilistWebtoon, ...webtoonRows, ...coverSeed(seedWebtoon, "Webtoon")]).slice(0, MAX_PER_CATEGORY);
+  const newWebtoon = unique([...anilistWebtoon.slice().reverse(), ...webtoonRows.slice().reverse(), ...coverSeed(seedCatalog["webtoon:new"] || [], "Webtoon")]).slice(0, MAX_PER_CATEGORY);
   const catalog = {
     ...seedCatalog,
     "anime:popular": popularAnime, "anime:new": newAnime, anime: popularAnime,
