@@ -282,7 +282,21 @@ try {
   const anilistByTitle = new Map(mangaDexRows.map(row => [normalizeTitle(row.title), row]));
   const withMangaDexCover = row => {
     const found = anilistByTitle.get(normalizeTitle(row.title));
-    return found ? { ...row, ...found, id: row.id, externalId: row.externalId, progress: row.progress || 0, status: row.status || "À commencer", source: "AniList + catalogue statique" } : row;
+    if (!found) return row;
+    return {
+      ...row,
+      cover: found.cover || row.cover,
+      synopsis: found.synopsis || row.synopsis,
+      year: found.year || row.year,
+      score: found.score ?? row.score,
+      genres: found.genres?.length ? found.genres : row.genres,
+      altTitle: found.altTitle || row.altTitle || "",
+      format: found.format || row.format || "",
+      publicationStatus: found.publicationStatus || row.publicationStatus || "",
+      volumes: found.volumes || row.volumes || 0,
+      countryOfOrigin: found.countryOfOrigin || row.countryOfOrigin || "",
+      source: "AniList + catalogue statique"
+    };
   };
   const manhwaRows = unique([...anilistManhwa, ...sourceManhwa.map(withMangaDexCover)]);
   const webtoonRows = unique([...anilistWebtoon, ...sourceWebtoon.map(withMangaDexCover)]);
