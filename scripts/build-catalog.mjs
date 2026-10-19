@@ -160,9 +160,9 @@ try {
     const found = coverByMal.get(String(row.externalId));
     return found ? { ...row, cover: found.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres || row.genres, source: "MangaDex" } : row;
   });
-  const mangaDexByTitle = new Map(mangaDexRows.map(row => [row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, ""), row]));
+  const mangaDexByTitle = new Map(mangaDexRows.map(row => [row.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""), row]));
   const withMangaDexCover = row => {
-    const key = row.title.toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, "");
+    const key = row.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
     const found = mangaDexByTitle.get(key);
     return found ? { ...row, cover: found.cover || row.cover, synopsis: found.synopsis || row.synopsis, genres: found.genres?.length ? found.genres : row.genres, source: "MangaDex + catalogue statique" } : row;
   };
