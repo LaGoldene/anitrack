@@ -225,7 +225,7 @@ function fromMangaDex(item) {
   const title = a.title?.en || Object.values(a.title || {})[0] || "";
   const coverRel = (item.relationships || []).find(r => r.type === "cover_art");
   const filename = coverRel?.attributes?.fileName;
-  const cover = filename ? `https://uploads.mangadex.org/covers/${item.id}/${filename}.256.jpg` : FALLBACK_COVER;
+  const cover = filename ? `https://uploads.mangadex.org/covers/${item.id}/${encodeURIComponent(filename)}.512.jpg` : FALLBACK_COVER;
   const malId = Number(a.links?.mal) || Number(a.links?.anilist) || 0;
   const tagNames = (a.tags || []).map(t => String(t.attributes?.name?.en || "").toLowerCase());
   const isKorean = String(a.originalLanguage || "").toLowerCase() === "ko";
@@ -281,7 +281,7 @@ try {
   const anilistAnime = await fetchAniListCollection("Anime");
   const anilistManga = await fetchAniListCollection("Manga", { country: "JP", format: "MANGA" }, 1000);
   const anilistManhwa = await fetchAniListCollection("Manhwa", { country: "KR", format: "MANGA" }, 1000);
-  const anilistWebtoon = await fetchAniListCollection("Webtoon", { format: "WEBTOON" }, 500);
+  // AniList ne définit pas WEBTOON comme valeur de MediaFormat : ce filtre renvoie HTTP 400.\n  // Les webtoons sont récupérés depuis MangaDex via le tag Long Strip ci-dessous.\n  const anilistWebtoon = [];
   if (anilistAnime.length) animeRows = unique([...anilistAnime, ...animeRows]);
 
   let generalRows = [];
@@ -328,7 +328,7 @@ try {
   const manhwaRows = unique([...anilistManhwa, ...koreanRows, ...sourceManhwa.map(withMangaDexCover)]);
   const webtoonRows = unique([...anilistWebtoon, ...longStripRows, ...sourceWebtoon.map(withMangaDexCover)]);
   const otherMangaDex = unique([...anilistManga, ...generalRows.filter(x => x.type === "Manga"), ...mangaRows]);
-  console.log("Sources récupérées :", JSON.stringify({
+  if (!anilistAnime.length) console.warn("AniList Anime vide : conservation du catalogue anime statique et de ses couvertures.");\n  if (!longStripRows.length) console.warn("MangaDex Long Strip vide : les webtoons dépendront du catalogue de secours.");\n  console.log("Sources récupérées :", JSON.stringify({
     anime: anilistAnime.length, manga: anilistManga.length, manhwaAniList: anilistManhwa.length,
     webtoonAniList: anilistWebtoon.length, mangaDex: generalRows.length, korean: koreanRows.length, longStrip: longStripRows.length
   }));
